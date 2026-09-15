@@ -2,7 +2,6 @@ from flask import Flask, request, jsonify
 
 from app.config import MONITOR_SECRET
 from app.bot import handle_update, run_monitor
-from app.telegram_api import call as telegram_call
 
 app = Flask(__name__)
 
@@ -20,20 +19,6 @@ def root():
 @app.get("/api/health")
 def health():
     return jsonify({"ok": True})
-
-
-@app.get("/api/setup")
-def setup():
-    webhook_url = f"https://{request.host}/api/telegram"
-    try:
-        result = telegram_call("setWebhook", {
-            "url": webhook_url,
-            "allowed_updates": ["message", "edited_message"],
-            "drop_pending_updates": True
-        })
-        return jsonify({"ok": True, "webhook_url": webhook_url, "telegram": result})
-    except Exception as e:
-        return jsonify({"ok": False, "error": type(e).__name__}), 500
 
 
 @app.post("/api/telegram")
