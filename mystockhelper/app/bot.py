@@ -4,9 +4,12 @@ from .market import get_snapshot
 from .analysis import assess, status_line, score_opportunity
 from .portfolio_metrics import portfolio_totals, position_metrics
 from .portfolio_advice import break_even_gap_pct, portfolio_aware_view, top_actions
+from .chat_router import classify_message
 from .telegram_api import send_message
 
 HELP = """MyStockHelper
+
+يمكنك استخدام الأوامر أو التحدث معي بالعربية بشكل طبيعي.
 
 الأوامر:
 /status - تقرير المحفظة بالعربية
@@ -16,8 +19,13 @@ HELP = """MyStockHelper
 /chatid - عرض Telegram Chat ID
 /help - المساعدة
 
-الأسهم الحالية:
-PCLA, NVDA, ORCL, ESTC, XOS
+أمثلة محادثة:
+كيف وضع محفظتي اليوم؟
+حلل لي NVDA
+ما رأيك في ORCL؟
+كم السيولة عندي؟
+ما أخطر مركز في المحفظة؟
+هل توجد فرص شراء الآن؟
 
 ملاحظة Market Data:
 المصدر المجاني Best-Effort وليس Exchange-Grade Real-Time."""
@@ -120,13 +128,19 @@ def _portfolio_report():
         m = position_metrics(ticker, s.price, totals['portfolio_value'])
         view = portfolio_aware_view(ticker, s, a, m)
         gap = break_even_gap_pct(s.price, m['avg_cost'])
+        if gap is None:
+            break_even_text = "غير متاحة"
+        elif gap <= 0:
+            break_even_text = f"فوق Break-even بنسبة {abs(gap):.2f}%"
+        else:
+            break_even_text = f"يحتاج ارتفاع {gap:.2f}% للوصول إلى Break-even"
 
         rows += [
             f"{view['level']} {ticker} — {view['label']}",
             f"الكمية: {m['shares']:g} سهم | متوسط الشراء: {_money(m['avg_cost'])}",
             f"السعر الحالي: {_money(s.price)} | قيمة المركز: {_money(m['value'])}",
             f"P/L: {_money(m['pnl'])} ({_pct(m['pnl_pct'])}) | الوزن من إجمالي المحفظة: {_pct_plain(m['weight_pct'])}",
-            f"المسافة إلى Break-even: {_pct_plain(gap)}" if gap is not None else "المسافة إلى Break-even: غير متاحة",
+            f"Break-even: {break_even_text}",
             f"اليوم: {_pct(s.daily_change_pct)} | 15m: {_pct(s.move_15m_pct)} | Trend: {a.trend}",
             f"Risk: {a.risk}/10 | Confidence: {a.confidence}/100",
             f"التقييم الفني: {a.recommendation}",
@@ -207,6 +221,98 @@ def _opportunities_report():
     return "\n".join(rows)
 
 
+def _stock_report(ticker):
+    try:
+        s = get_snapshot(ticker)
+        a = assess(s)
+        return a.text
+    except Exception as e:
+        return f"{ticker}: البيانات غير متاحة / Unable to Verify.\nالسبب: {type(e).__name__}"
+
+
+def _cash_report():
+    return (
+        "💰 السيولة الحالية\n"
+        f"السيولة: {_sar(CASH_SAR)} ≈ {_money(CASH_USD)}\n"
+        f"Buying Power التقريبي: {_money(CASH_USD)}\n"
+        "هذه القيمة لا تشمل أي تحويلات أو التزامات مستقبلية غير مسجلة في البوت."
+    )
+
+
+def _portfolio_risk_report():
+    prices = {}
+    items = []
+    for ticker in WATCHLIST:
+        try:
+            s = get_snapshot(ticker)
+            prices[ticker] = s.price
+        except Exception:
+            prices[ticker] = None
+
+    totals = portfolio_totals(prices)
+    for ticker in WATCHLIST:
+        price = prices.get(ticker)
+        if price is None:
+            continue
+        m = position_metrics(ticker, price, totals['portfolio_value'])
+        if m:
+            items.append((m['weight_pct'] or 0, ticker, m))
+
+    if not items:
+        return "تعذر حساب مخاطر المحفظة حاليًا بسبب نقص بيانات السوق."
+
+    items.sort(reverse=True)
+    weight, ticker, m = items[0]
+    return (
+        "🛡️ أبرز مخاطر المحفظة حاليًا\n"
+        f"أكبر مركز: {ticker}\n"
+        f"الوزن من إجمالي المحفظة: {weight:.2f}%\n"
+        f"P/L للمركز: {_pct(m['pnl_pct'])}\n"
+        "كلما زاد وزن مركز واحد ارتفع Concentration Risk حتى لو كان السهم جيدًا فنيًا."
+    )
+
+
+def _handle_conversation(chat_id, text):
+    intent = classify_message(text)
+    kind = intent.get("intent")
+    ticker = intent.get("ticker")
+
+    if kind == "greeting":
+        send_message(chat_id, "أهلًا 👋 أنا MyStockHelper. اسألني عن محفظتك أو السيولة أو الفرص أو أي سهم بالرمز.")
+        return True
+    if kind == "help":
+        send_message(chat_id, HELP)
+        return True
+    if kind == "cash":
+        send_message(chat_id, _cash_report())
+        return True
+    if kind == "portfolio_risk":
+        send_message(chat_id, _portfolio_risk_report())
+        return True
+    if kind == "portfolio":
+        send_message(chat_id, _portfolio_report())
+        return True
+    if kind == "opportunities":
+        send_message(chat_id, _opportunities_report())
+        return True
+    if kind == "watchlist":
+        send_message(chat_id, "📌 الأسهم الحالية:\n" + "\n".join(f"- {x}" for x in WATCHLIST))
+        return True
+    if kind == "stock" and ticker:
+        send_message(chat_id, _stock_report(ticker))
+        return True
+    if kind == "need_ticker":
+        send_message(chat_id, "اذكر رمز السهم أو اسمه، مثال: حلل لي NVDA")
+        return True
+
+    send_message(
+        chat_id,
+        "أستطيع حاليًا الدردشة معك حول المحفظة، السيولة، المخاطر، فرص الشراء وتحليل الأسهم.\n"
+        "مثال: كيف وضع محفظتي؟ أو حلل NVDA أو كم السيولة عندي؟"
+    )
+    return True
+
+
 def handle_update(update: dict):
     msg = update.get("message") or update.get("edited_message")
     if not msg:
@@ -243,48 +349,42 @@ def handle_update(update: dict):
         return {"handled": True}
 
     if command == "/stock":
-        parts=text.split()
-        if len(parts)<2:
-            send_message(chat_id,"الاستخدام: /stock NVDA")
-            return {"handled":True}
-        ticker=parts[1].upper()
-        try:
-            s=get_snapshot(ticker)
-            a=assess(s)
-            send_message(chat_id,a.text)
-        except Exception as e:
-            send_message(chat_id,f"{ticker}: البيانات غير متاحة / Unable to Verify.\nالسبب: {type(e).__name__}")
-        return {"handled":True}
+        parts = text.split()
+        if len(parts) < 2:
+            send_message(chat_id, "الاستخدام: /stock NVDA")
+            return {"handled": True}
+        send_message(chat_id, _stock_report(parts[1].upper()))
+        return {"handled": True}
 
     if command == "/status":
-        send_message(chat_id,_portfolio_report())
-        return {"handled":True}
+        send_message(chat_id, _portfolio_report())
+        return {"handled": True}
 
     if command == "/opportunities":
-        send_message(chat_id,_opportunities_report())
-        return {"handled":True}
+        send_message(chat_id, _opportunities_report())
+        return {"handled": True}
 
     if text.startswith("/"):
-        send_message(chat_id,"أمر غير معروف. استخدم /help")
-        return {"handled":True}
+        send_message(chat_id, "أمر غير معروف. استخدم /help")
+        return {"handled": True}
 
-    return {"handled":False}
+    return {"handled": _handle_conversation(chat_id, text)}
 
 
 def run_monitor():
     if not ALLOWED_CHAT_ID:
         raise RuntimeError("TELEGRAM_ALLOWED_CHAT_ID is not configured.")
 
-    sent=[]
-    checked=[]
+    sent = []
+    checked = []
     for ticker in WATCHLIST:
         checked.append(ticker)
         try:
-            s=get_snapshot(ticker)
-            a=assess(s)
+            s = get_snapshot(ticker)
+            a = assess(s)
             if a.alert:
-                send_message(ALLOWED_CHAT_ID,a.text)
+                send_message(ALLOWED_CHAT_ID, a.text)
                 sent.append(ticker)
         except Exception:
             continue
-    return {"checked":checked,"alerts_sent":sent}
+    return {"checked": checked, "alerts_sent": sent}
