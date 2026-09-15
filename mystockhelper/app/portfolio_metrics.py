@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .config import PORTFOLIO, WATCHLIST
+from .config import PORTFOLIO, WATCHLIST, CASH_USD
 
 
 def position_metrics(ticker, current_price, total_value=None):
@@ -27,7 +27,7 @@ def position_metrics(ticker, current_price, total_value=None):
 
 def portfolio_totals(prices):
     total_cost = 0.0
-    total_value = 0.0
+    stocks_value = 0.0
     for ticker in WATCHLIST:
         pos = PORTFOLIO.get(ticker)
         if not pos:
@@ -37,12 +37,21 @@ def portfolio_totals(prices):
         total_cost += shares * avg_cost
         price = prices.get(ticker)
         if price is not None:
-            total_value += shares * price
-    pnl = total_value - total_cost if total_cost else None
+            stocks_value += shares * price
+
+    pnl = stocks_value - total_cost if total_cost else None
     pnl_pct = (pnl / total_cost * 100.0) if pnl is not None and total_cost else None
+    portfolio_value = stocks_value + CASH_USD
+    invested_pct = (stocks_value / portfolio_value * 100.0) if portfolio_value else None
+    cash_pct = (CASH_USD / portfolio_value * 100.0) if portfolio_value else None
+
     return {
         "total_cost": total_cost,
-        "total_value": total_value,
+        "total_value": stocks_value,
         "pnl": pnl,
         "pnl_pct": pnl_pct,
+        "cash_usd": CASH_USD,
+        "portfolio_value": portfolio_value,
+        "invested_pct": invested_pct,
+        "cash_pct": cash_pct,
     }
