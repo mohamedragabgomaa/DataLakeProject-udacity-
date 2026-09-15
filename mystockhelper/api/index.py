@@ -3,11 +3,18 @@ from flask import Flask, request, jsonify
 try:
     from app.config import MONITOR_SECRET
     from app.bot import handle_update, run_monitor
+    from app.opening_report import send_opening_report
 except ModuleNotFoundError:
     from mystockhelper.app.config import MONITOR_SECRET
     from mystockhelper.app.bot import handle_update, run_monitor
+    from mystockhelper.app.opening_report import send_opening_report
 
 app = Flask(__name__)
+
+
+def _authorized_monitor_request():
+    supplied = request.args.get("secret") or request.headers.get("X-Monitor-Secret", "")
+    return bool(MONITOR_SECRET) and supplied == MONITOR_SECRET
 
 
 @app.get("/")
@@ -35,10 +42,21 @@ def telegram_webhook():
 
 @app.route("/api/monitor", methods=["GET", "POST"])
 def monitor():
-    supplied = request.args.get("secret") or request.headers.get("X-Monitor-Secret", "")
-    if not MONITOR_SECRET or supplied != MONITOR_SECRET:
+    if not _authorized_monitor_request():
         return jsonify({"ok": False, "error": "unauthorized"}), 401
     try:
         return jsonify({"ok": True, **run_monitor()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": type(e).__name__}), 500
+
+
+@app.route("/api/opening-report", methods=["GET", "POST"])
+def opening_report():
+    if not _authorized_monitor_request():
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    try:
+        force = str(request.args.get("force", "")).lower() in {"1", "true", "yes"}
+        result = send_opening_report(force=force)
+        return jsonify({"ok": True, **result})
     except Exception as e:
         return jsonify({"ok": False, "error": type(e).__name__}), 500
