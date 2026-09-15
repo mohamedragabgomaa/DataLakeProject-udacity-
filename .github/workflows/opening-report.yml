@@ -1,0 +1,24 @@
+name: Opening Market Report
+
+on:
+  schedule:
+    # Run at both possible UTC equivalents of 10:00 New York.
+    # Application logic sends only when New York local time is in the 10:00 hour.
+    - cron: "0 14 * * 1-5"
+    - cron: "0 15 * * 1-5"
+  workflow_dispatch:
+
+jobs:
+  opening-report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send 30-minute opening report
+        env:
+          MONITOR_URL: ${{ secrets.MONITOR_URL }}
+          MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
+        run: |
+          test -n "$MONITOR_URL"
+          test -n "$MONITOR_SECRET"
+          curl --fail --silent --show-error \
+            -H "X-Monitor-Secret: $MONITOR_SECRET" \
+            "$MONITOR_URL/api/opening-report"
