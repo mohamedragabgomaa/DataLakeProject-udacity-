@@ -79,33 +79,44 @@ def portfolio_aware_view(ticker, snapshot, assessment, metrics):
     }
 
 
+def _impact_score(item):
+    weight = max(0.0, float(item.get("weight_pct") or 0.0))
+    pnl = abs(float(item.get("pnl_pct") or 0.0))
+    risk = float(item.get("risk") or 0.0)
+    return (weight * 1.5) + (min(pnl, 50.0) * min(weight, 20.0) / 20.0) + (risk * min(weight, 20.0) / 10.0)
+
+
 def top_actions(position_views, cash_pct):
+    ranked = sorted(position_views, key=_impact_score, reverse=True)
     actions = []
 
-    concentrated = [x for x in position_views if (x.get("weight_pct") or 0) >= 35]
-    if concentrated:
-        x = max(concentrated, key=lambda item: item.get("weight_pct") or 0)
-        actions.append(
-            f"🟠 {x['ticker']}: يمثل {x['weight_pct']:.1f}% من إجمالي المحفظة؛ الأولوية عدم زيادة التركّز ومراجعة حجم المركز قبل أي تعزيز."
-        )
+    for x in ranked:
+        if len(actions) >= 3:
+            break
+        weight = float(x.get("weight_pct") or 0.0)
+        pnl = float(x.get("pnl_pct") or 0.0)
+        risk = int(x.get("risk") or 0)
 
-    stressed = [x for x in position_views if (x.get("pnl_pct") or 0) <= -20]
-    if stressed:
-        x = min(stressed, key=lambda item: item.get("pnl_pct") or 0)
-        actions.append(
-            f"🔴 {x['ticker']}: الخسارة {x['pnl_pct']:.1f}%؛ يحتاج مراجعة فرضية الاحتفاظ بدل Average Down تلقائيًا."
-        )
+        if weight >= 35:
+            actions.append(
+                f"🟠 {x['ticker']}: يمثل {weight:.1f}% من إجمالي المحفظة؛ الأولوية عدم زيادة التركّز ومراجعة حجم المركز قبل أي تعزيز."
+            )
+        elif pnl <= -20 and weight >= 2:
+            actions.append(
+                f"🔴 {x['ticker']}: الخسارة {pnl:.1f}% مع وزن {weight:.1f}%؛ يحتاج مراجعة فرضية الاحتفاظ وإدارة الأثر على المحفظة."
+            )
+        elif risk >= 7 and weight >= 5:
+            actions.append(
+                f"🟠 {x['ticker']}: Risk {risk}/10 ووزن {weight:.1f}%؛ راقب Trend وVolume ولا ترفع التعرض أثناء ارتفاع المخاطر."
+            )
+        elif pnl >= 5 and weight >= 5:
+            actions.append(
+                f"🟢 {x['ticker']}: مركز رابح بوزن {weight:.1f}%؛ راقب حماية المكاسب واستمرار Momentum."
+            )
 
-    risk_positions = [x for x in position_views if (x.get("risk") or 0) >= 7 and x not in stressed]
-    if risk_positions:
-        x = max(risk_positions, key=lambda item: item.get("risk") or 0)
+    if cash_pct is not None and cash_pct < 10 and len(actions) < 3:
         actions.append(
-            f"🟠 {x['ticker']}: Risk {x['risk']}/10؛ راقب Trend وVolume ولا ترفع التعرض أثناء ارتفاع المخاطر."
-        )
-
-    if cash_pct is not None and cash_pct < 10:
-        actions.append(
-            f"💰 السيولة {cash_pct:.1f}% فقط من المحفظة؛ استخدم Buying Power بشكل انتقائي واحتفظ بهامش سيولة للطوارئ والفرص الأعلى جودة."
+            f"💰 السيولة {cash_pct:.1f}% فقط من المحفظة؛ احتفظ بهامش سيولة ولا تستخدم Buying Power بالكامل في فرصة واحدة."
         )
 
     if not actions:
