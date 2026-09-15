@@ -1,7 +1,31 @@
+import json
 import os
 
-# الأسهم الحالية / Portfolio Priority Tier 1
-WATCHLIST = ["PCLA", "NVDA", "ORCL", "ESTC", "XOS"]
+DEFAULT_WATCHLIST = ["PCLA", "NVDA", "ORCL", "ESTC", "XOS"]
+
+
+def _load_portfolio():
+    raw = os.getenv("PORTFOLIO_JSON", "").strip()
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw)
+        cleaned = {}
+        for ticker, position in payload.items():
+            symbol = str(ticker).upper().strip()
+            shares = float(position.get("shares", 0))
+            avg_cost = float(position.get("avg_cost", 0))
+            if symbol and shares > 0 and avg_cost > 0:
+                cleaned[symbol] = {"shares": shares, "avg_cost": avg_cost}
+        return cleaned
+    except Exception:
+        return {}
+
+
+# Portfolio values are stored privately in Vercel Environment Variables,
+# never committed to the public GitHub repository.
+PORTFOLIO = _load_portfolio()
+WATCHLIST = list(PORTFOLIO.keys()) if PORTFOLIO else DEFAULT_WATCHLIST
 
 # Universe أولي لفرص جديدة. نستبعد الأسهم الحالية تلقائياً.
 # تم إبقاؤه محدوداً حتى يعمل الفحص ضمن الموارد المجانية وبزمن استجابة معقول.
