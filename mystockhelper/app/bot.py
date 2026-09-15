@@ -3,6 +3,7 @@ from .config import WATCHLIST, OPPORTUNITY_UNIVERSE, ALLOWED_CHAT_ID, MIN_OPPORT
 from .market import get_snapshot
 from .analysis import assess, status_line, score_opportunity
 from .portfolio_metrics import portfolio_totals, position_metrics
+from .portfolio_advice import break_even_gap_pct, portfolio_aware_view, top_actions
 from .telegram_api import send_message
 
 HELP = """MyStockHelper
@@ -60,6 +61,24 @@ def _portfolio_report():
             prices[ticker] = None
 
     totals = portfolio_totals(prices)
+    position_views = []
+
+    for ticker in WATCHLIST:
+        s = snapshots.get(ticker)
+        a = assessments.get(ticker)
+        pos = PORTFOLIO.get(ticker)
+        if not pos or s is None or s.price is None or a is None:
+            continue
+        m = position_metrics(ticker, s.price, totals['portfolio_value'])
+        view = portfolio_aware_view(ticker, s, a, m)
+        position_views.append({
+            "ticker": ticker,
+            "pnl_pct": m['pnl_pct'],
+            "weight_pct": m['weight_pct'],
+            "risk": a.risk,
+            "view": view,
+        })
+
     rows = [
         "📊 تقرير المحفظة الاستثمارية",
         "",
@@ -72,8 +91,13 @@ def _portfolio_report():
         f"نسبة الاستثمار: {_pct_plain(totals['invested_pct'])} | Cash Allocation: {_pct_plain(totals['cash_pct'])}",
         f"Buying Power التقريبي: {_money(totals['cash_usd'])}",
         "",
-        "📌 تفاصيل المراكز",
+        "🎯 أهم إجراءات اليوم",
     ]
+
+    for action in top_actions(position_views, totals.get('cash_pct')):
+        rows.append(action)
+
+    rows += ["", "📌 تفاصيل المراكز"]
 
     for ticker in WATCHLIST:
         s = snapshots.get(ticker)
@@ -94,14 +118,19 @@ def _portfolio_report():
             continue
 
         m = position_metrics(ticker, s.price, totals['portfolio_value'])
+        view = portfolio_aware_view(ticker, s, a, m)
+        gap = break_even_gap_pct(s.price, m['avg_cost'])
+
         rows += [
-            f"🔹 {ticker}",
+            f"{view['level']} {ticker} — {view['label']}",
             f"الكمية: {m['shares']:g} سهم | متوسط الشراء: {_money(m['avg_cost'])}",
             f"السعر الحالي: {_money(s.price)} | قيمة المركز: {_money(m['value'])}",
             f"P/L: {_money(m['pnl'])} ({_pct(m['pnl_pct'])}) | الوزن من إجمالي المحفظة: {_pct_plain(m['weight_pct'])}",
+            f"المسافة إلى Break-even: {_pct_plain(gap)}" if gap is not None else "المسافة إلى Break-even: غير متاحة",
             f"اليوم: {_pct(s.daily_change_pct)} | 15m: {_pct(s.move_15m_pct)} | Trend: {a.trend}",
             f"Risk: {a.risk}/10 | Confidence: {a.confidence}/100",
             f"التقييم الفني: {a.recommendation}",
+            f"التوصية Portfolio-Aware: {view['recommendation']}",
             "",
         ]
 
@@ -214,7 +243,7 @@ def handle_update(update: dict):
         return {"handled": True}
 
     if command == "/stock":
-        parts = text.split()
+        parts=text.split()
         if len(parts)<2:
             send_message(chat_id,"الاستخدام: /stock NVDA")
             return {"handled":True}
