@@ -7,13 +7,12 @@ from zoneinfo import ZoneInfo
 from .config import ALLOWED_CHAT_ID, WATCHLIST, MIN_OPPORTUNITY_SCORE
 from .market import get_snapshot
 from .analysis import score_opportunity
+from .market_context import get_market_context
 from .telegram_api import send_message
 
 NEW_YORK = ZoneInfo("America/New_York")
 RIYADH = ZoneInfo("Asia/Riyadh")
 
-# Liquid / actively traded U.S. names for the zero-cost opening scan.
-# This is a curated scan universe, not the entire U.S. market.
 OPENING_SCAN_UNIVERSE = [
     "AAPL", "MSFT", "AMZN", "GOOGL", "META", "NVDA", "AVGO", "AMD",
     "TSLA", "PLTR", "NFLX", "CRM", "ORCL", "ADBE", "NOW", "MU",
@@ -30,9 +29,18 @@ def _fmt(value, suffix="", digits=2):
     return f"{value:.{digits}f}{suffix}"
 
 
+def _compact_money(value):
+    if value is None:
+        return "غير متاح"
+    value = float(value)
+    if abs(value) >= 1_000_000_000:
+        return f"${value/1_000_000_000:.1f}B"
+    if abs(value) >= 1_000_000:
+        return f"${value/1_000_000:.1f}M"
+    return f"${value:,.0f}"
+
+
 def _is_report_window(now_ny: datetime) -> bool:
-    # Scheduled twice in UTC to absorb U.S. daylight-saving changes.
-    # Only the run that lands in the 10:00 New York hour is accepted.
     return now_ny.weekday() < 5 and now_ny.hour == 10
 
 
@@ -49,18 +57,19 @@ def _fetch_many(tickers):
     return results
 
 
-def _candidate_action(snapshot, opportunity):
+def _candidate_action(snapshot, opportunity, context):
     daily = snapshot.daily_change_pct or 0
     move15 = snapshot.move_15m_pct or 0
     vol = snapshot.volume_spike
+    catalyst = context.get("catalyst", "غير مؤكد") if context else "غير مؤكد"
 
     if daily >= 5.0:
-        return "انتظار Pullback - لا تطارد السهم بعد امتداد قوي."
+        return f"انتظر Pullback ولا تطارد السعر. Catalyst: {catalyst}."
     if opportunity.score >= 70 and move15 > 0 and vol is not None and vol >= 1.2:
-        return "مرشح شراء مشروط بعد تأكيد Breakout/ثبات السعر؛ تجنب Market Order المتسرع."
+        return f"فرصة مراقبة قوية بعد تأكيد Breakout وثبات Volume. Catalyst: {catalyst}."
     if opportunity.score >= MIN_OPPORTUNITY_SCORE:
-        return "قائمة مراقبة قوية؛ انتظر تأكيد Momentum وVolume قبل الدخول."
-    return "لا توجد إشارة شراء كافية حاليًا."
+        return f"قائمة مراقبة قوية؛ انتظر تأكيد Momentum/Volume. Catalyst: {catalyst}."
+    return "لا توجد إشارة كافية حاليًا."
 
 
 def build_opening_report(force: bool = False):
@@ -95,6 +104,16 @@ def build_opening_report(force: bool = False):
     candidates.sort(key=lambda item: item[0], reverse=True)
     candidates = candidates[:3]
 
+    contexts = {}
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futures = {pool.submit(get_market_context, s.ticker): s.ticker for _, s, _ in candidates}
+        for future in as_completed(futures):
+            ticker = futures[future]
+            try:
+                contexts[ticker] = future.result()
+            except Exception:
+                contexts[ticker] = None
+
     rows = [
         "📈 تقرير أول 30 دقيقة من السوق الأمريكي",
         f"🕙 نيويورك: {now_ny:%Y-%m-%d %H:%M}",
@@ -108,9 +127,7 @@ def build_opening_report(force: bool = False):
         if s is None:
             rows.append(f"{ticker}: بيانات غير متاحة")
         else:
-            rows.append(
-                f"{ticker}: {_fmt(s.daily_change_pct, '%')} | 15m {_fmt(s.move_15m_pct, '%')}"
-            )
+            rows.append(f"{ticker}: {_fmt(s.daily_change_pct, '%')} | 15m {_fmt(s.move_15m_pct, '%')}")
 
     rows += ["", "🔥 الأكثر صعودًا من قائمة الفحص"]
     for idx, s in enumerate(gainers, start=1):
@@ -120,27 +137,30 @@ def build_opening_report(force: bool = False):
             f"15m {_fmt(s.move_15m_pct, '%')} | Vol {_fmt(s.volume_spike, 'x')}{owned}"
         )
 
-    rows += ["", "🎯 أفضل مرشحي الشراء المشروط"]
+    rows += ["", "🎯 أفضل فرص المراقبة بعد أول 30 دقيقة"]
     if not candidates:
         rows.append("لا توجد فرصة تجاوزت فلتر التأكيد حاليًا؛ الانتظار أفضل من مطاردة السوق.")
     else:
         for rank, (_, s, o) in enumerate(candidates, start=1):
+            context = contexts.get(s.ticker) or {}
+            fundamentals = context.get("fundamentals") or {}
             rows += [
                 f"{rank}) {s.ticker} | Opportunity Score {o.score}/100",
                 f"السعر: {_fmt(s.price)} | اليوم: {_fmt(s.daily_change_pct, '%')} | 15m: {_fmt(s.move_15m_pct, '%')}",
                 f"Volume: {_fmt(s.volume_spike, 'x')} | Risk {o.risk}/10 | Confidence {o.confidence}/100",
+                f"Market Cap: {_compact_money(fundamentals.get('market_cap'))} | Earnings: {context.get('earnings', 'غير متاح')}",
+                f"Catalyst: {context.get('catalyst', 'غير مؤكد')}",
                 f"لماذا؟ {o.rationale}",
-                f"خطة التصرف: {_candidate_action(s, o)}",
+                f"خطة المراقبة: {_candidate_action(s, o, context)}",
                 "",
             ]
 
     rows += [
         "⚠️ قاعدة Never Chase",
-        "السهم الأكثر صعودًا ليس بالضرورة الأفضل للشراء. الامتداد السعري بدون Pullback/Volume/Catalyst مناسب قد يرفع المخاطر.",
+        "السهم الأكثر صعودًا ليس بالضرورة الأفضل. لا يمكن معرفة القمة مسبقًا بشكل موثوق؛ راقب استمرار Momentum وVolume بدل مطاردة السعر.",
         "",
         "📌 Data Quality",
-        "البيانات Best-Effort وليست Exchange-Grade Real-Time. التقرير أداة Screening وليس أمر تنفيذ صفقة.",
-        "",
+        "البيانات والسياق Best-Effort وليست Exchange-Grade Real-Time، وقد تكون Catalyst/News/Fundamentals ناقصة أو متأخرة.",
         "ملاحظة: قائمة الفحص مركزة على أسهم أمريكية سائلة ونشطة وليست كامل السوق الأمريكي.",
     ]
 
