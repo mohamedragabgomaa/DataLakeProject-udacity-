@@ -1,5 +1,5 @@
 from __future__ import annotations
-from .config import WATCHLIST, OPPORTUNITY_UNIVERSE, ALLOWED_CHAT_ID, MIN_OPPORTUNITY_SCORE, PORTFOLIO
+from .config import WATCHLIST, OPPORTUNITY_UNIVERSE, ALLOWED_CHAT_ID, MIN_OPPORTUNITY_SCORE, PORTFOLIO, CASH_SAR, CASH_USD
 from .market import get_snapshot
 from .analysis import assess, status_line, score_opportunity
 from .portfolio_metrics import portfolio_totals, position_metrics
@@ -30,8 +30,16 @@ def _money(x):
     return "غير متاح" if x is None else f"${x:,.2f}"
 
 
+def _sar(x):
+    return "غير متاح" if x is None else f"{x:,.0f} SAR"
+
+
 def _pct(x):
     return "غير متاح" if x is None else f"{x:+.2f}%"
+
+
+def _pct_plain(x):
+    return "غير متاح" if x is None else f"{x:.2f}%"
 
 
 def _portfolio_report():
@@ -56,9 +64,13 @@ def _portfolio_report():
         "📊 تقرير المحفظة الاستثمارية",
         "",
         "🧭 الملخص التنفيذي",
-        f"إجمالي تكلفة الشراء: {_money(totals['total_cost'])}",
+        f"إجمالي تكلفة شراء الأسهم: {_money(totals['total_cost'])}",
         f"القيمة الحالية للأسهم: {_money(totals['total_value'])}",
-        f"الربح/الخسارة غير المحققة: {_money(totals['pnl'])} ({_pct(totals['pnl_pct'])})",
+        f"السيولة المتاحة: {_sar(CASH_SAR)} ≈ {_money(CASH_USD)}",
+        f"إجمالي قيمة المحفظة: {_money(totals['portfolio_value'])}",
+        f"الربح/الخسارة غير المحققة للأسهم: {_money(totals['pnl'])} ({_pct(totals['pnl_pct'])})",
+        f"نسبة الاستثمار: {_pct_plain(totals['invested_pct'])} | Cash Allocation: {_pct_plain(totals['cash_pct'])}",
+        f"Buying Power التقريبي: {_money(totals['cash_usd'])}",
         "",
         "📌 تفاصيل المراكز",
     ]
@@ -81,12 +93,12 @@ def _portfolio_report():
             ]
             continue
 
-        m = position_metrics(ticker, s.price, totals['total_value'])
+        m = position_metrics(ticker, s.price, totals['portfolio_value'])
         rows += [
             f"🔹 {ticker}",
             f"الكمية: {m['shares']:g} سهم | متوسط الشراء: {_money(m['avg_cost'])}",
             f"السعر الحالي: {_money(s.price)} | قيمة المركز: {_money(m['value'])}",
-            f"P/L: {_money(m['pnl'])} ({_pct(m['pnl_pct'])}) | الوزن: {_pct(m['weight_pct'])}",
+            f"P/L: {_money(m['pnl'])} ({_pct(m['pnl_pct'])}) | الوزن من إجمالي المحفظة: {_pct_plain(m['weight_pct'])}",
             f"اليوم: {_pct(s.daily_change_pct)} | 15m: {_pct(s.move_15m_pct)} | Trend: {a.trend}",
             f"Risk: {a.risk}/10 | Confidence: {a.confidence}/100",
             f"التقييم الفني: {a.recommendation}",
@@ -98,7 +110,7 @@ def _portfolio_report():
         s = snapshots.get(ticker)
         if s is None or s.price is None:
             continue
-        m = position_metrics(ticker, s.price, totals['total_value'])
+        m = position_metrics(ticker, s.price, totals['portfolio_value'])
         if m and m['weight_pct'] is not None and m['weight_pct'] >= 35:
             concentrations.append(f"{ticker} {m['weight_pct']:.1f}%")
 
@@ -106,7 +118,7 @@ def _portfolio_report():
     if concentrations:
         rows.append("تركيز مرتفع في: " + "، ".join(concentrations))
     else:
-        rows.append("لا يوجد مركز منفرد يتجاوز 35% من قيمة الأسهم الحالية.")
+        rows.append("لا يوجد مركز منفرد يتجاوز 35% من إجمالي قيمة المحفظة شامل السيولة.")
 
     rows += [
         "",
@@ -203,49 +215,47 @@ def handle_update(update: dict):
 
     if command == "/stock":
         parts = text.split()
-        if len(parts) < 2:
-            send_message(chat_id, "الاستخدام: /stock NVDA")
-            return {"handled": True}
-        ticker = parts[1].upper()
+        if len(parts)<2:
+            send_message(chat_id,"الاستخدام: /stock NVDA")
+            return {"handled":True}
+        ticker=parts[1].upper()
         try:
-            s = get_snapshot(ticker)
-            a = assess(s)
-            send_message(chat_id, a.text)
+            s=get_snapshot(ticker)
+            a=assess(s)
+            send_message(chat_id,a.text)
         except Exception as e:
-            send_message(chat_id, f"{ticker}: البيانات غير متاحة / Unable to Verify.\nالسبب: {type(e).__name__}")
-        return {"handled": True}
+            send_message(chat_id,f"{ticker}: البيانات غير متاحة / Unable to Verify.\nالسبب: {type(e).__name__}")
+        return {"handled":True}
 
     if command == "/status":
-        send_message(chat_id, _portfolio_report())
-        return {"handled": True}
+        send_message(chat_id,_portfolio_report())
+        return {"handled":True}
 
     if command == "/opportunities":
-        send_message(chat_id, _opportunities_report())
-        return {"handled": True}
+        send_message(chat_id,_opportunities_report())
+        return {"handled":True}
 
     if text.startswith("/"):
-        send_message(chat_id, "أمر غير معروف. استخدم /help")
-        return {"handled": True}
+        send_message(chat_id,"أمر غير معروف. استخدم /help")
+        return {"handled":True}
 
-    return {"handled": False}
+    return {"handled":False}
 
 
 def run_monitor():
     if not ALLOWED_CHAT_ID:
         raise RuntimeError("TELEGRAM_ALLOWED_CHAT_ID is not configured.")
 
-    sent = []
-    checked = []
-
+    sent=[]
+    checked=[]
     for ticker in WATCHLIST:
         checked.append(ticker)
         try:
-            s = get_snapshot(ticker)
-            a = assess(s)
+            s=get_snapshot(ticker)
+            a=assess(s)
             if a.alert:
-                send_message(ALLOWED_CHAT_ID, a.text)
+                send_message(ALLOWED_CHAT_ID,a.text)
                 sent.append(ticker)
         except Exception:
             continue
-
-    return {"checked": checked, "alerts_sent": sent}
+    return {"checked":checked,"alerts_sent":sent}
