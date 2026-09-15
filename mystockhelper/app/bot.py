@@ -1,48 +1,182 @@
 from __future__ import annotations
-from .config import WATCHLIST,ALLOWED_CHAT_ID
+from .config import WATCHLIST, OPPORTUNITY_UNIVERSE, ALLOWED_CHAT_ID, MIN_OPPORTUNITY_SCORE
 from .market import get_snapshot
-from .analysis import assess,status_line
+from .analysis import assess, status_line, score_opportunity
 from .telegram_api import send_message
 
-HELP="""MyStockHelper\n\nCommands:\n/status - Portfolio status\n/stock NVDA - Analyze one ticker\n/watchlist - Show Tier 1 watchlist\n/chatid - Show your Telegram Chat ID\n/help - Commands\n\nPriority portfolio:\nPCLA, NVDA, ORCL, ESTC, XOS\n\nMarket-data note:\nThe free default source is best-effort and is not treated as exchange-grade real-time data."""
+HELP = """MyStockHelper
 
-def _authorized(chat_id): return bool(ALLOWED_CHAT_ID) and str(chat_id)==str(ALLOWED_CHAT_ID)
+الأوامر:
+/status - تقرير المحفظة بالعربية
+/stock NVDA - تحليل سهم محدد
+/watchlist - عرض الأسهم الحالية
+/opportunities - فحص فرص شراء جديدة
+/chatid - عرض Telegram Chat ID
+/help - المساعدة
 
-def handle_update(update:dict):
-    msg=update.get("message") or update.get("edited_message")
-    if not msg: return {"handled":False}
-    chat_id=(msg.get("chat") or {}).get("id"); text=(msg.get("text") or "").strip()
-    if not chat_id: return {"handled":False}
-    command=text.split()[0].split("@")[0].lower() if text else ""
-    if command=="/chatid": send_message(chat_id,f"Your Chat ID is: {chat_id}"); return {"handled":True}
-    if command=="/start": send_message(chat_id, HELP if not ALLOWED_CHAT_ID or _authorized(chat_id) else "This bot is private. Use /chatid and configure the allowed Chat ID."); return {"handled":True}
-    if not _authorized(chat_id): send_message(chat_id,"Unauthorized chat. This bot is configured for a private investor account."); return {"handled":True,"authorized":False}
-    if command=="/help": send_message(chat_id,HELP); return {"handled":True}
-    if command=="/watchlist": send_message(chat_id,"Portfolio Priority Tier 1:\n"+"\n".join(f"- {x}" for x in WATCHLIST)); return {"handled":True}
-    if command=="/stock":
-        parts=text.split()
-        if len(parts)<2: send_message(chat_id,"Usage: /stock NVDA"); return {"handled":True}
-        ticker=parts[1].upper()
-        try: s=get_snapshot(ticker); a=assess(s); send_message(chat_id,a.text)
-        except Exception as e: send_message(chat_id,f"{ticker}: DATA UNAVAILABLE / UNABLE TO VERIFY.\nReason: {type(e).__name__}")
-        return {"handled":True}
-    if command=="/status":
-        rows=["PORTFOLIO STATUS",""]
-        for ticker in WATCHLIST:
-            try: s=get_snapshot(ticker); rows.append(status_line(s,assess(s,include_sec=False)))
-            except Exception: rows.append(f"{ticker}: DATA UNAVAILABLE / UNABLE TO VERIFY")
-        rows += ["","Data is best-effort and not exchange-grade real-time."]
-        send_message(chat_id,"\n".join(rows)); return {"handled":True}
-    if text.startswith("/"): send_message(chat_id,"Unknown command. Use /help."); return {"handled":True}
-    return {"handled":False}
+الأسهم الحالية:
+PCLA, NVDA, ORCL, ESTC, XOS
+
+ملاحظة Market Data:
+المصدر المجاني Best-Effort وليس Exchange-Grade Real-Time."""
+
+
+def _authorized(chat_id):
+    return bool(ALLOWED_CHAT_ID) and str(chat_id) == str(ALLOWED_CHAT_ID)
+
+
+def _portfolio_report():
+    rows = [
+        "📊 تقرير المحفظة الحالية",
+        "",
+        "التوصيات الحالية:",
+    ]
+    for ticker in WATCHLIST:
+        try:
+            s = get_snapshot(ticker)
+            a = assess(s, include_sec=False)
+            rows.append(status_line(s, a))
+        except Exception:
+            rows.append(f"{ticker} | البيانات غير متاحة / Unable to Verify")
+
+    rows += [
+        "",
+        "📌 ملاحظة:",
+        "التوصيات تعتمد على Technical/Volume signals من مصدر مجاني Best-Effort، وليست توصيات تنفيذ فوري.",
+        "",
+        "استخدم /opportunities لفحص فرص شراء جديدة.",
+    ]
+    return "\n".join(rows)
+
+
+def _opportunities_report():
+    candidates = []
+    errors = []
+
+    for ticker in OPPORTUNITY_UNIVERSE:
+        if ticker in WATCHLIST:
+            continue
+        try:
+            s = get_snapshot(ticker)
+            o = score_opportunity(s)
+            if o.score >= MIN_OPPORTUNITY_SCORE:
+                candidates.append((o.score, s, o))
+        except Exception:
+            errors.append(ticker)
+
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    candidates = candidates[:5]
+
+    rows = ["🔎 فرص شراء جديدة", ""]
+
+    if not candidates:
+        rows += [
+            "لا توجد حاليًا فرصة جديدة تجاوزت فلتر التأكيد.",
+            "القرار الصحيح هنا هو الانتظار بدل إجبار السوق على إعطاء فرصة.",
+        ]
+    else:
+        for _, s, o in candidates:
+            rows += [
+                f"{o.ticker} | Score {o.score}/100",
+                f"التصنيف: {o.label}",
+                f"السعر: {s.price if s.price is not None else 'غير متاح'}",
+                f"التغير اليومي: {s.daily_change_pct:.2f}%" if s.daily_change_pct is not None else "التغير اليومي: غير متاح",
+                f"15m Move: {s.move_15m_pct:.2f}%" if s.move_15m_pct is not None else "15m Move: غير متاح",
+                f"Volume Spike: {s.volume_spike:.2f}x" if s.volume_spike is not None else "Volume Spike: غير متاح",
+                f"Risk: {o.risk}/10 | Confidence: {o.confidence}/100",
+                f"الأسباب: {o.rationale}",
+                "التوصية: لا تدخل Market Order مباشرة؛ راقب Pullback/Breakout confirmation وCatalyst موثوق قبل الشراء.",
+                "",
+            ]
+
+    rows += [
+        "⚠️ تنبيه:",
+        "فرص الشراء هنا هي Screening وليست ضمانًا أو توصية مالية ملزمة. المصدر المجاني ليس Exchange-Grade Real-Time.",
+    ]
+
+    return "\n".join(rows)
+
+
+def handle_update(update: dict):
+    msg = update.get("message") or update.get("edited_message")
+    if not msg:
+        return {"handled": False}
+
+    chat_id = (msg.get("chat") or {}).get("id")
+    text = (msg.get("text") or "").strip()
+    if not chat_id:
+        return {"handled": False}
+
+    command = text.split()[0].split("@")[0].lower() if text else ""
+
+    if command == "/chatid":
+        send_message(chat_id, f"Your Chat ID is: {chat_id}")
+        return {"handled": True}
+
+    if command == "/start":
+        if not ALLOWED_CHAT_ID or _authorized(chat_id):
+            send_message(chat_id, HELP)
+        else:
+            send_message(chat_id, "هذا البوت خاص بحساب استثماري واحد.")
+        return {"handled": True}
+
+    if not _authorized(chat_id):
+        send_message(chat_id, "هذا البوت خاص بحساب استثماري واحد وغير مصرح لهذا الحساب.")
+        return {"handled": True, "authorized": False}
+
+    if command == "/help":
+        send_message(chat_id, HELP)
+        return {"handled": True}
+
+    if command == "/watchlist":
+        send_message(chat_id, "📌 الأسهم الحالية:\n" + "\n".join(f"- {x}" for x in WATCHLIST))
+        return {"handled": True}
+
+    if command == "/stock":
+        parts = text.split()
+        if len(parts) < 2:
+            send_message(chat_id, "الاستخدام: /stock NVDA")
+            return {"handled": True}
+        ticker = parts[1].upper()
+        try:
+            s = get_snapshot(ticker)
+            a = assess(s)
+            send_message(chat_id, a.text)
+        except Exception as e:
+            send_message(chat_id, f"{ticker}: البيانات غير متاحة / Unable to Verify.\nالسبب: {type(e).__name__}")
+        return {"handled": True}
+
+    if command == "/status":
+        send_message(chat_id, _portfolio_report())
+        return {"handled": True}
+
+    if command == "/opportunities":
+        send_message(chat_id, _opportunities_report())
+        return {"handled": True}
+
+    if text.startswith("/"):
+        send_message(chat_id, "أمر غير معروف. استخدم /help")
+        return {"handled": True}
+
+    return {"handled": False}
+
 
 def run_monitor():
-    if not ALLOWED_CHAT_ID: raise RuntimeError("TELEGRAM_ALLOWED_CHAT_ID is not configured.")
-    sent=[]; checked=[]
+    if not ALLOWED_CHAT_ID:
+        raise RuntimeError("TELEGRAM_ALLOWED_CHAT_ID is not configured.")
+
+    sent = []
+    checked = []
+
     for ticker in WATCHLIST:
         checked.append(ticker)
         try:
-            s=get_snapshot(ticker); a=assess(s)
-            if a.alert: send_message(ALLOWED_CHAT_ID,a.text); sent.append(ticker)
-        except Exception: continue
-    return {"checked":checked,"alerts_sent":sent}
+            s = get_snapshot(ticker)
+            a = assess(s)
+            if a.alert:
+                send_message(ALLOWED_CHAT_ID, a.text)
+                sent.append(ticker)
+        except Exception:
+            continue
+
+    return {"checked": checked, "alerts_sent": sent}
