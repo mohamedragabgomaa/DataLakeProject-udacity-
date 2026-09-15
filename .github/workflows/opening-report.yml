@@ -19,6 +19,12 @@ jobs:
         run: |
           test -n "$MONITOR_URL"
           test -n "$MONITOR_SECRET"
+
+          ENDPOINT="$MONITOR_URL/api/opening-report"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            ENDPOINT="$MONITOR_URL/api/opening-report?force=1"
+          fi
+
           curl --fail --silent --show-error \
             -H "X-Monitor-Secret: $MONITOR_SECRET" \
-            "$MONITOR_URL/api/opening-report"
+            "$ENDPOINT"
