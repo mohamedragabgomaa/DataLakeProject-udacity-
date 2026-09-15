@@ -22,10 +22,23 @@ def _load_portfolio():
         return {}
 
 
+def _env_float(name, default=0.0):
+    try:
+        return float(os.getenv(name, str(default)).strip())
+    except Exception:
+        return float(default)
+
+
 # Portfolio values are stored privately in Vercel Environment Variables,
 # never committed to the public GitHub repository.
 PORTFOLIO = _load_portfolio()
 WATCHLIST = list(PORTFOLIO.keys()) if PORTFOLIO else DEFAULT_WATCHLIST
+
+# Cash is also private. Saudi riyal is converted for portfolio aggregation
+# using the long-standing SAR/USD peg unless an override is supplied.
+CASH_SAR = max(0.0, _env_float("CASH_SAR", 0.0))
+SAR_PER_USD = _env_float("SAR_PER_USD", 3.75)
+CASH_USD = CASH_SAR / SAR_PER_USD if SAR_PER_USD > 0 else 0.0
 
 # Universe أولي لفرص جديدة. نستبعد الأسهم الحالية تلقائياً.
 # تم إبقاؤه محدوداً حتى يعمل الفحص ضمن الموارد المجانية وبزمن استجابة معقول.
