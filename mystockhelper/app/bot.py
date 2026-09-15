@@ -1,7 +1,8 @@
 from __future__ import annotations
-from .config import WATCHLIST, OPPORTUNITY_UNIVERSE, ALLOWED_CHAT_ID, MIN_OPPORTUNITY_SCORE
+from .config import WATCHLIST, OPPORTUNITY_UNIVERSE, ALLOWED_CHAT_ID, MIN_OPPORTUNITY_SCORE, PORTFOLIO
 from .market import get_snapshot
 from .analysis import assess, status_line, score_opportunity
+from .portfolio_metrics import portfolio_totals, position_metrics
 from .telegram_api import send_message
 
 HELP = """MyStockHelper
@@ -25,24 +26,92 @@ def _authorized(chat_id):
     return bool(ALLOWED_CHAT_ID) and str(chat_id) == str(ALLOWED_CHAT_ID)
 
 
+def _money(x):
+    return "غير متاح" if x is None else f"${x:,.2f}"
+
+
+def _pct(x):
+    return "غير متاح" if x is None else f"{x:+.2f}%"
+
+
 def _portfolio_report():
-    rows = [
-        "📊 تقرير المحفظة الحالية",
-        "",
-        "التوصيات الحالية:",
-    ]
+    snapshots = {}
+    assessments = {}
+    prices = {}
+
     for ticker in WATCHLIST:
         try:
             s = get_snapshot(ticker)
             a = assess(s, include_sec=False)
-            rows.append(status_line(s, a))
+            snapshots[ticker] = s
+            assessments[ticker] = a
+            prices[ticker] = s.price
         except Exception:
-            rows.append(f"{ticker} | البيانات غير متاحة / Unable to Verify")
+            snapshots[ticker] = None
+            assessments[ticker] = None
+            prices[ticker] = None
+
+    totals = portfolio_totals(prices)
+    rows = [
+        "📊 تقرير المحفظة الاستثمارية",
+        "",
+        "🧭 الملخص التنفيذي",
+        f"إجمالي تكلفة الشراء: {_money(totals['total_cost'])}",
+        f"القيمة الحالية للأسهم: {_money(totals['total_value'])}",
+        f"الربح/الخسارة غير المحققة: {_money(totals['pnl'])} ({_pct(totals['pnl_pct'])})",
+        "",
+        "📌 تفاصيل المراكز",
+    ]
+
+    for ticker in WATCHLIST:
+        s = snapshots.get(ticker)
+        a = assessments.get(ticker)
+        pos = PORTFOLIO.get(ticker)
+
+        if not pos:
+            rows += [f"⚪ {ticker}", "بيانات المركز غير موجودة في PORTFOLIO_JSON", ""]
+            continue
+
+        if s is None or s.price is None or a is None:
+            rows += [
+                f"⚪ {ticker}",
+                f"الكمية: {pos['shares']:g} | متوسط الشراء: {_money(pos['avg_cost'])}",
+                "بيانات السوق غير متاحة حاليًا.",
+                "",
+            ]
+            continue
+
+        m = position_metrics(ticker, s.price, totals['total_value'])
+        rows += [
+            f"🔹 {ticker}",
+            f"الكمية: {m['shares']:g} سهم | متوسط الشراء: {_money(m['avg_cost'])}",
+            f"السعر الحالي: {_money(s.price)} | قيمة المركز: {_money(m['value'])}",
+            f"P/L: {_money(m['pnl'])} ({_pct(m['pnl_pct'])}) | الوزن: {_pct(m['weight_pct'])}",
+            f"اليوم: {_pct(s.daily_change_pct)} | 15m: {_pct(s.move_15m_pct)} | Trend: {a.trend}",
+            f"Risk: {a.risk}/10 | Confidence: {a.confidence}/100",
+            f"التقييم الفني: {a.recommendation}",
+            "",
+        ]
+
+    concentrations = []
+    for ticker in WATCHLIST:
+        s = snapshots.get(ticker)
+        if s is None or s.price is None:
+            continue
+        m = position_metrics(ticker, s.price, totals['total_value'])
+        if m and m['weight_pct'] is not None and m['weight_pct'] >= 35:
+            concentrations.append(f"{ticker} {m['weight_pct']:.1f}%")
+
+    rows += ["🛡️ Concentration Risk"]
+    if concentrations:
+        rows.append("تركيز مرتفع في: " + "، ".join(concentrations))
+    else:
+        rows.append("لا يوجد مركز منفرد يتجاوز 35% من قيمة الأسهم الحالية.")
 
     rows += [
         "",
         "📌 ملاحظة:",
-        "التوصيات تعتمد على Technical/Volume signals من مصدر مجاني Best-Effort، وليست توصيات تنفيذ فوري.",
+        "الأسعار Best-Effort وليست Exchange-Grade Real-Time. الأرقام المعروضة تقديرية وتعتمد على بيانات السوق المتاحة.",
         "",
         "استخدم /opportunities لفحص فرص شراء جديدة.",
     ]
