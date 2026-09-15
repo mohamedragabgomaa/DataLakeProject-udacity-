@@ -1,7 +1,11 @@
 from flask import Flask, request, jsonify
 
-from app.config import MONITOR_SECRET
-from app.bot import handle_update, run_monitor
+try:
+    from app.config import MONITOR_SECRET
+    from app.bot import handle_update, run_monitor
+except ModuleNotFoundError:
+    from mystockhelper.app.config import MONITOR_SECRET
+    from mystockhelper.app.bot import handle_update, run_monitor
 
 app = Flask(__name__)
 
