@@ -21,6 +21,8 @@ def portfolio_aware_view(ticker, snapshot, assessment, metrics):
     risk = assessment.risk
     trend = assessment.trend
     daily = snapshot.daily_change_pct or 0.0
+    move15 = snapshot.move_15m_pct or 0.0
+    technical_recommendation = str(getattr(assessment, "recommendation", "") or "")
 
     if weight is not None and weight >= 40:
         return {
@@ -37,6 +39,19 @@ def portfolio_aware_view(ticker, snapshot, assessment, metrics):
             "label": "مراجعة استراتيجية للمركز",
             "recommendation": f"الخسارة النسبية كبيرة. تجنب Average Down تلقائيًا وراجع فرضية الاحتفاظ. {impact}",
             "priority": 90 + min(abs(pnl_pct), 50),
+        }
+
+    momentum_extended = (
+        trend in {"صاعد", "صاعد قوي"}
+        and risk >= 7
+        and (daily >= 4.0 or move15 >= 3.0 or "Pullback" in technical_recommendation)
+    )
+    if momentum_extended:
+        return {
+            "level": "🟠",
+            "label": "Momentum قوي / مخاطرة مرتفعة",
+            "recommendation": "الزخم قوي لكن المخاطرة مرتفعة والسعر ممتد. لا تطارد الحركة؛ انتظر Pullback أو تماسكًا مع Volume داعم قبل أي تعزيز.",
+            "priority": 88 + risk,
         }
 
     if pnl_pct is not None and pnl_pct <= -10 and risk >= 7:
@@ -83,7 +98,14 @@ def _impact_score(item):
     weight = max(0.0, float(item.get("weight_pct") or 0.0))
     pnl = abs(float(item.get("pnl_pct") or 0.0))
     risk = float(item.get("risk") or 0.0)
-    return (weight * 1.5) + (min(pnl, 50.0) * min(weight, 20.0) / 20.0) + (risk * min(weight, 20.0) / 10.0)
+    view = item.get("view") or {}
+    view_priority = float(view.get("priority") or 0.0)
+    return (
+        (weight * 1.5)
+        + (min(pnl, 50.0) * min(weight, 20.0) / 20.0)
+        + (risk * min(weight, 20.0) / 10.0)
+        + (view_priority * min(weight, 25.0) / 100.0)
+    )
 
 
 def top_actions(position_views, cash_pct):
@@ -96,10 +118,20 @@ def top_actions(position_views, cash_pct):
         weight = float(x.get("weight_pct") or 0.0)
         pnl = float(x.get("pnl_pct") or 0.0)
         risk = int(x.get("risk") or 0)
+        view = x.get("view") or {}
+        label = str(view.get("label") or "")
 
         if weight >= 35:
             actions.append(
                 f"🟠 {x['ticker']}: يمثل {weight:.1f}% من إجمالي المحفظة؛ الأولوية عدم زيادة التركّز ومراجعة حجم المركز قبل أي تعزيز."
+            )
+        elif label == "Momentum قوي / مخاطرة مرتفعة" and weight >= 5:
+            actions.append(
+                f"🟠 {x['ticker']}: Momentum قوي مع Risk {risk}/10 ووزن {weight:.1f}%؛ لا تطارد السعر وانتظر Pullback/تماسك قبل أي تعزيز."
+            )
+        elif label == "احتفاظ حذر" and weight >= 10:
+            actions.append(
+                f"🟡 {x['ticker']}: اتجاه ضعيف/هابط مع وزن {weight:.1f}%؛ راقبه قبل المراكز الرابحة ولا تعزز حتى يتحسن Trend وVolume."
             )
         elif pnl <= -20 and weight >= 2:
             actions.append(
