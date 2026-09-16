@@ -2,10 +2,12 @@ name: Opening Market Report
 
 on:
   schedule:
-    # Run at both possible UTC equivalents of 10:00 New York.
+    # Run away from the top of the hour to reduce GitHub schedule congestion.
+    # 14:07 UTC = about 10:07 New York during U.S. daylight saving time.
+    # 15:07 UTC = about 10:07 New York during U.S. standard time.
     # Application logic sends only when New York local time is in the 10:00 hour.
-    - cron: "0 14 * * 1-5"
-    - cron: "0 15 * * 1-5"
+    - cron: "7 14 * * 1-5"
+    - cron: "7 15 * * 1-5"
   workflow_dispatch:
 
 jobs:
