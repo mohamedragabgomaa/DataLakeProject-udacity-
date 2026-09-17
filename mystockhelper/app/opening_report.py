@@ -84,12 +84,16 @@ def build_opening_report(force: bool = False, scheduled: bool = False):
     now_ny = datetime.now(NEW_YORK)
     now_riyadh = datetime.now(RIYADH)
 
-    if not force and not _is_report_window(now_ny):
+    if scheduled and now_ny.weekday() >= 5:
+        return None, "weekend"
+
+    if not force and not scheduled and not _is_report_window(now_ny):
         return None, "outside_opening_window"
 
     market = _fetch_many(MARKET_ETFS)
     spy = market.get("SPY")
 
+    # Scheduled runs may arrive late, but only send while the U.S. market is still regular.
     if not force and (spy is None or str(spy.market_state).upper() != "REGULAR"):
         return None, "market_not_regular"
 
