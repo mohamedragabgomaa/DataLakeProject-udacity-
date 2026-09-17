@@ -72,7 +72,15 @@ def _candidate_action(snapshot, opportunity, context):
     return "لا توجد إشارة كافية حاليًا."
 
 
-def build_opening_report(force: bool = False):
+def _report_title(now_ny: datetime, force: bool, scheduled: bool):
+    if scheduled and not _is_report_window(now_ny):
+        return "⚠️ تقرير السوق - تشغيل تلقائي متأخر"
+    if force and not scheduled:
+        return "🧪 تقرير سوق - اختبار يدوي"
+    return "📈 تقرير أول 30 دقيقة من السوق الأمريكي"
+
+
+def build_opening_report(force: bool = False, scheduled: bool = False):
     now_ny = datetime.now(NEW_YORK)
     now_riyadh = datetime.now(RIYADH)
 
@@ -114,11 +122,19 @@ def build_opening_report(force: bool = False):
             except Exception:
                 contexts[ticker] = None
 
+    late_note = []
+    if scheduled and not _is_report_window(now_ny):
+        late_note = [
+            "⚠️ تنبيه: GitHub Actions شغّل المهمة بعد نافذة أول 30 دقيقة، لذلك هذه قراءة السوق وقت التشغيل وليست Opening Snapshot.",
+            "",
+        ]
+
     rows = [
-        "📈 تقرير أول 30 دقيقة من السوق الأمريكي",
+        _report_title(now_ny, force, scheduled),
         f"🕙 نيويورك: {now_ny:%Y-%m-%d %H:%M}",
         f"🕔 الرياض: {now_riyadh:%Y-%m-%d %H:%M}",
         "",
+        *late_note,
         "🧭 حالة السوق",
     ]
 
@@ -137,7 +153,8 @@ def build_opening_report(force: bool = False):
             f"15m {_fmt(s.move_15m_pct, '%')} | Vol {_fmt(s.volume_spike, 'x')}{owned}"
         )
 
-    rows += ["", "🎯 أفضل فرص المراقبة بعد أول 30 دقيقة"]
+    section_title = "🎯 أفضل فرص المراقبة بعد أول 30 دقيقة" if _is_report_window(now_ny) else "🎯 أفضل فرص المراقبة وقت التشغيل"
+    rows += ["", section_title]
     if not candidates:
         rows.append("لا توجد فرصة تجاوزت فلتر التأكيد حاليًا؛ الانتظار أفضل من مطاردة السوق.")
     else:
@@ -164,14 +181,15 @@ def build_opening_report(force: bool = False):
         "ملاحظة: قائمة الفحص مركزة على أسهم أمريكية سائلة ونشطة وليست كامل السوق الأمريكي.",
     ]
 
-    return "\n".join(rows), "ready"
+    status = "ready_late" if scheduled and not _is_report_window(now_ny) else "ready"
+    return "\n".join(rows), status
 
 
-def send_opening_report(force: bool = False):
+def send_opening_report(force: bool = False, scheduled: bool = False):
     if not ALLOWED_CHAT_ID:
         raise RuntimeError("TELEGRAM_ALLOWED_CHAT_ID is not configured.")
 
-    report, status = build_opening_report(force=force)
+    report, status = build_opening_report(force=force, scheduled=scheduled)
     if not report:
         return {"sent": False, "status": status}
 
