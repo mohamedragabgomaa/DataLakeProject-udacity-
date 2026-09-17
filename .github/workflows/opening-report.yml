@@ -2,19 +2,15 @@ name: Opening Market Report
 
 on:
   schedule:
-    # Run away from the top of the hour to reduce GitHub schedule congestion.
-    # 14:07 UTC = about 10:07 New York during U.S. daylight saving time.
-    # 15:07 UTC = about 10:07 New York during U.S. standard time.
-    # Application logic sends only when New York local time is in the 10:00 hour.
-    - cron: "7 14 * * 1-5"
-    - cron: "7 15 * * 1-5"
+    - cron: "7 10 * * 1-5"
+      timezone: "America/New_York"
   workflow_dispatch:
 
 jobs:
   opening-report:
     runs-on: ubuntu-latest
     steps:
-      - name: Send 30-minute opening report
+      - name: Send opening market report
         env:
           MONITOR_URL: ${{ secrets.MONITOR_URL }}
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
@@ -22,7 +18,7 @@ jobs:
           test -n "$MONITOR_URL"
           test -n "$MONITOR_SECRET"
 
-          ENDPOINT="$MONITOR_URL/api/opening-report"
+          ENDPOINT="$MONITOR_URL/api/opening-report?scheduled=1"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             ENDPOINT="$MONITOR_URL/api/opening-report?force=1"
           fi
