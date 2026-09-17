@@ -56,7 +56,8 @@ def opening_report():
         return jsonify({"ok": False, "error": "unauthorized"}), 401
     try:
         force = str(request.args.get("force", "")).lower() in {"1", "true", "yes"}
-        result = send_opening_report(force=force)
+        scheduled = str(request.args.get("scheduled", "")).lower() in {"1", "true", "yes"}
+        result = send_opening_report(force=force, scheduled=scheduled)
         return jsonify({"ok": True, **result})
     except Exception as e:
         return jsonify({"ok": False, "error": type(e).__name__}), 500
