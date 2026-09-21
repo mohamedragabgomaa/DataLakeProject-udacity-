@@ -49,6 +49,7 @@ OPPORTUNITY_UNIVERSE = [
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 ALLOWED_CHAT_ID = os.getenv("TELEGRAM_ALLOWED_CHAT_ID", "").strip()
 MONITOR_SECRET = os.getenv("MONITOR_SECRET", "").strip()
+CRON_SECRET = os.getenv("CRON_SECRET", "").strip()
 SEC_USER_AGENT = os.getenv("SEC_USER_AGENT", "").strip()
 
 RIYADH_TZ = "Asia/Riyadh"
