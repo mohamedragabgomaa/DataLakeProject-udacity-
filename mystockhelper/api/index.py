@@ -1,11 +1,13 @@
+import hmac
+
 from flask import Flask, request, jsonify
 
 try:
-    from app.config import MONITOR_SECRET
+    from app.config import MONITOR_SECRET, CRON_SECRET
     from app.bot import handle_update, run_monitor
     from app.opening_report import send_opening_report
 except ModuleNotFoundError:
-    from mystockhelper.app.config import MONITOR_SECRET
+    from mystockhelper.app.config import MONITOR_SECRET, CRON_SECRET
     from mystockhelper.app.bot import handle_update, run_monitor
     from mystockhelper.app.opening_report import send_opening_report
 
@@ -14,7 +16,13 @@ app = Flask(__name__)
 
 def _authorized_monitor_request():
     supplied = request.args.get("secret") or request.headers.get("X-Monitor-Secret", "")
-    return bool(MONITOR_SECRET) and supplied == MONITOR_SECRET
+    return bool(MONITOR_SECRET) and hmac.compare_digest(str(supplied), MONITOR_SECRET)
+
+
+def _authorized_vercel_cron_request():
+    authorization = request.headers.get("Authorization", "")
+    expected = f"Bearer {CRON_SECRET}" if CRON_SECRET else ""
+    return bool(expected) and hmac.compare_digest(authorization, expected)
 
 
 @app.get("/")
@@ -59,5 +67,20 @@ def opening_report():
         scheduled = str(request.args.get("scheduled", "")).lower() in {"1", "true", "yes"}
         result = send_opening_report(force=force, scheduled=scheduled)
         return jsonify({"ok": True, **result})
+    except Exception as e:
+        return jsonify({"ok": False, "error": type(e).__name__}), 500
+
+
+@app.get("/api/vercel-cron/opening-report")
+def vercel_cron_opening_report():
+    if not _authorized_vercel_cron_request():
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    try:
+        # Vercel Hobby cron can execute at any point within the scheduled hour.
+        # Calling with force=False and scheduled=False keeps the app-side guard:
+        # weekdays, New York 10:00 hour, and REGULAR market session only.
+        result = send_opening_report(force=False, scheduled=False)
+        return jsonify({"ok": True, "scheduler": "vercel-cron", **result})
     except Exception as e:
         return jsonify({"ok": False, "error": type(e).__name__}), 500
