@@ -1,62 +1,20 @@
 name: Opening Market Report
 
 on:
-  schedule:
-    - cron: "7,17,27,37,47,57 10 * * 1-5"
-      timezone: "America/New_York"
   workflow_dispatch:
 
 jobs:
   opening-report:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-
     steps:
-      - name: Resolve New York date
-        id: nydate
-        shell: bash
-        run: echo "value=$(TZ=America/New_York date +%F)" >> "$GITHUB_OUTPUT"
-
-      - name: Restore daily send marker
-        if: github.event_name == 'schedule'
-        id: sent-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: .opening-report-sent
-          key: opening-report-${{ steps.nydate.outputs.value }}
-
-      - name: Send opening market report
-        id: send
-        if: github.event_name == 'workflow_dispatch' || steps.sent-cache.outputs.cache-hit != 'true'
+      - name: Send manual opening market report test
         env:
           MONITOR_URL: ${{ secrets.MONITOR_URL }}
           MONITOR_SECRET: ${{ secrets.MONITOR_SECRET }}
-        shell: bash
         run: |
-          set -euo pipefail
           test -n "$MONITOR_URL"
           test -n "$MONITOR_SECRET"
 
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            ENDPOINT="$MONITOR_URL/api/opening-report?force=1"
-          else
-            ENDPOINT="$MONITOR_URL/api/opening-report?scheduled=1"
-          fi
-
-          RESPONSE=$(curl --fail --silent --show-error             -H "X-Monitor-Secret: $MONITOR_SECRET"             "$ENDPOINT")
-
-          echo "$RESPONSE"
-
-          SENT=$(printf '%s' "$RESPONSE" | python -c 'import json,sys; print(str(bool(json.load(sys.stdin).get("sent"))).lower())')
-          echo "sent=$SENT" >> "$GITHUB_OUTPUT"
-
-          if [ "$SENT" = "true" ] && [ "${{ github.event_name }}" = "schedule" ]; then
-            touch .opening-report-sent
-          fi
-
-      - name: Save daily send marker
-        if: github.event_name == 'schedule' && steps.send.outputs.sent == 'true' && steps.sent-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: .opening-report-sent
-          key: opening-report-${{ steps.nydate.outputs.value }}
+          curl --fail --silent --show-error \
+            -H "X-Monitor-Secret: $MONITOR_SECRET" \
+            "$MONITOR_URL/api/opening-report?force=1"
