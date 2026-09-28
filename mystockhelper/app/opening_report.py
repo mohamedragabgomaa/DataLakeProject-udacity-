@@ -44,6 +44,27 @@ def _is_report_window(now_ny: datetime) -> bool:
     return now_ny.weekday() < 5 and now_ny.hour == 10
 
 
+def _has_current_regular_market_data(snapshot, now_ny: datetime) -> bool:
+    """Validate that the market source has fresh regular-session data for today.
+
+    Yahoo Chart does not reliably expose meta.marketState, so freshness of the
+    regularMarketTime is a safer free-data guard for the scheduled report.
+    """
+    if snapshot is None or snapshot.price is None or snapshot.timestamp is None:
+        return False
+
+    try:
+        stamp_ny = snapshot.timestamp.astimezone(NEW_YORK)
+    except Exception:
+        return False
+
+    if stamp_ny.date() != now_ny.date():
+        return False
+
+    minutes = stamp_ny.hour * 60 + stamp_ny.minute
+    return (9 * 60 + 30) <= minutes < (16 * 60)
+
+
 def _fetch_many(tickers):
     results = {}
     with ThreadPoolExecutor(max_workers=6) as pool:
@@ -93,9 +114,10 @@ def build_opening_report(force: bool = False, scheduled: bool = False):
     market = _fetch_many(MARKET_ETFS)
     spy = market.get("SPY")
 
-    # Scheduled runs may arrive late, but only send while the U.S. market is still regular.
-    if not force and (spy is None or str(spy.market_state).upper() != "REGULAR"):
-        return None, "market_not_regular"
+    # Yahoo Chart does not reliably provide marketState. Use today's SPY
+    # regular-market timestamp instead so valid sessions are not rejected.
+    if not force and not _has_current_regular_market_data(spy, now_ny):
+        return None, "market_not_regular_or_stale"
 
     snapshots = _fetch_many(OPENING_SCAN_UNIVERSE)
     valid = [s for s in snapshots.values() if s is not None and s.daily_change_pct is not None]
@@ -129,7 +151,7 @@ def build_opening_report(force: bool = False, scheduled: bool = False):
     late_note = []
     if scheduled and not _is_report_window(now_ny):
         late_note = [
-            "⚠️ تنبيه: GitHub Actions شغّل المهمة بعد نافذة أول 30 دقيقة، لذلك هذه قراءة السوق وقت التشغيل وليست Opening Snapshot.",
+            "⚠️ تنبيه: المجدول شغّل المهمة بعد نافذة أول 30 دقيقة، لذلك هذه قراءة السوق وقت التشغيل وليست Opening Snapshot.",
             "",
         ]
 
